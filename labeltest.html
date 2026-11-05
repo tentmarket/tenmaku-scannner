@@ -35,21 +35,57 @@ const Y0 = 20.0;    // 1段目のラベルの上位置
 const PX = 87.6;    // 列の間隔（左ラベルの左端→右ラベルの左端）
 const PY = 42.3;    // 段の間隔
 
-// ===== テスト用サンプルデータ =====
-const PRODUCTS = [
-  { size: '3m×6m',     color: 'ホワイト',       code: '3x6',        cc: 'WH' },
-  { size: '3m×3m',     color: 'グリーン',       code: '3x3',        cc: 'GN' },
-  { size: '3.6m×7.2m', color: 'ロイヤルブルー', code: 'HG-3.6x7.2', cc: 'RO' },
-  { size: '4m×8m',     color: 'スカイブルー',   code: '4x8',        cc: 'SB' }
+// ===== カラー一覧（名前と表示色。表示色は試作用の近似色） =====
+const COLORS = {
+  WH: ['ホワイト',       '#FFFFFF'],
+  RO: ['ロイヤルブルー', '#1A47B8'],
+  GN: ['グリーン',       '#1E8A3C'],
+  BE: ['ベージュ',       '#D9C3A0'],
+  SK: ['スキンベージュ', '#E8B89A'],
+  GR: ['グレー',         '#8A8D91'],
+  YE: ['イエロー',       '#F2C200'],
+  OR: ['オレンジ',       '#F28C00'],
+  RE: ['レッド',         '#D01F2A'],
+  PI: ['ピンク',         '#F06EA9'],
+  BW: ['ブラウン',       '#6B4226'],
+  BU: ['バーガンディ',   '#7A1530'],
+  PU: ['パープル',       '#6A3FA0'],
+  LI: ['ライムグリーン', '#8CC63F'],
+  SB: ['スカイブルー',   '#3FA9E0'],
+  NA: ['ネイビー',       '#1B2A55'],
+  BL: ['ブラック',       '#111111']
+};
+
+// ===== テスト用サンプルデータ（17色をサイズ4種に割り当てて順に出す） =====
+const SIZES = [
+  { size: '3m×6m',     code: '3x6' },
+  { size: '3m×3m',     code: '3x3' },
+  { size: '3.6m×7.2m', code: 'HG-3.6x7.2' },
+  { size: '4m×8m',     code: '4x8' }
 ];
+const PRODUCTS = Object.keys(COLORS).map(function (cc, i) {
+  const s = SIZES[i % SIZES.length];
+  return { size: s.size, code: s.code, cc: cc };
+});
 function makeSample(i) {
-  const p = PRODUCTS[i % 4];
-  const serial = String(Math.floor(i / 4) + 1).padStart(3, '0');
+  const p = PRODUCTS[i % PRODUCTS.length];
+  const serial = String(Math.floor(i / PRODUCTS.length) + 1).padStart(3, '0');
   return {
-    size: p.size, color: p.color, date: '2026/11/04',
+    size: p.size,
+    color: COLORS[p.cc][0],
+    hex: COLORS[p.cc][1],
+    date: '2026/11/04',
     no: p.code + '-' + p.cc + '-20261104-' + serial,
     id: (crypto.randomUUID ? crypto.randomUUID() : 'TEST-' + i + '-' + Date.now())
   };
+}
+
+// 明るい色かどうか（明るい色には黒い縁取りを付ける）
+function isLight(hex) {
+  const r = parseInt(hex.substr(1, 2), 16);
+  const g = parseInt(hex.substr(3, 2), 16);
+  const b = parseInt(hex.substr(5, 2), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5;
 }
 
 // 文字部分を画像にする（日本語フォントを同梱せずに試すため）
@@ -59,20 +95,34 @@ function textImage(lb) {
   c.width = w * S; c.height = h * S;
   const g = c.getContext('2d');
   g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
-  g.fillStyle = '#000'; g.textBaseline = 'top';
+  g.textBaseline = 'top';
   const fam = '"Hiragino Sans","Yu Gothic","Meiryo","Noto Sans JP",sans-serif';
   const font = (mm, bold) => (bold ? 'bold ' : '') + Math.round(mm * S) + 'px ' + fam;
-  function draw(text, mm, bold, y) {
+
+  // color：文字色、outline：黒い縁取りを付けるか
+  function draw(text, mm, bold, y, color, outline) {
     let s = mm; g.font = font(s, bold);
-    while (g.measureText(text).width > w * S && s > 1.5) { s -= 0.1; g.font = font(s, bold); }
-    g.fillText(text, 0, y * S);
+    const pad = outline ? 0.5 : 0;           // 縁取り分の余白(mm)
+    while (g.measureText(text).width > (w - pad * 2) * S && s > 1.5) {
+      s -= 0.1; g.font = font(s, bold);
+    }
+    const x = pad * S;
+    if (outline) {
+      g.lineJoin = 'round';
+      g.lineWidth = 0.5 * S;                 // 縁取りの太さ（外側に約0.25mm）
+      g.strokeStyle = '#000';
+      g.strokeText(text, x, y * S);
+    }
+    g.fillStyle = color;
+    g.fillText(text, x, y * S);
     return s;
   }
+
   let y = 3;
-  y += draw(lb.size, 8, true, y) * 1.3;
-  y += draw(lb.color, 6.5, true, y) * 1.4;
-  y += draw('入庫日 ' + lb.date, 4, false, y) * 1.7;
-  draw(lb.no, 3.4, false, y);
+  y += draw(lb.size, 8, true, y, '#000', false) * 1.3;
+  y += draw(lb.color, 6.5, true, y, lb.hex, isLight(lb.hex)) * 1.4;
+  y += draw('入庫日 ' + lb.date, 4, false, y, '#000', false) * 1.7;
+  draw(lb.no, 3.4, false, y, '#000', false);
   return c.toDataURL('image/png');
 }
 
