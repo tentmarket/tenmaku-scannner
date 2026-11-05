@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>天幕在庫管理 スキャナー（試作）</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; color: #222; background: #fff; }
+  button { font-size: 18px; padding: 14px 20px; margin: 6px 0; width: 100%; }
+  video { width: 100%; background: #000; }
+  .box { padding: 10px; border: 1px solid #999; margin: 8px 0; word-break: break-all; }
+  .new { background: #e6f7ea; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+<h2>QRスキャナー（試作）</h2>
+
+<button id="startBtn">① カメラを起動</button>
+<div class="box" id="status">待機中</div>
+<video id="video" playsinline muted></video>
+<canvas id="canvas" hidden></canvas>
+
+<label><input type="checkbox" id="soundChk" checked> 確認音を鳴らす</label>
+<div class="box">読み取り数：<span id="count">0</span></div>
+<ul id="list"></ul>
+
+<button id="sendBtn">② この内容でアプリを開く</button>
+<button id="clearBtn">リストをクリア</button>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+// ここをGASアプリのURL（/execで終わるもの）に書き換える
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwU0PEyaLRBu_8A7D5qfQEP9ge4YZItvdB-4XGwItYWytx6DR77cAmJwrlskWLESk4Cdg/exec';
+
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+const statusEl = document.getElementById('status');
+const listEl = document.getElementById('list');
+const countEl = document.getElementById('count');
+
+const found = [];            // 読み取り済みの内容（重複なし）
+let audioCtx = null;
+let lastText = '';
+let lastTime = 0;
+let scanning = false;
+
+function beep(freq, ms) {
+  if (!document.getElementById('soundChk').checked || !audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.frequency.value = freq;
+  g.gain.value = 0.2;
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start();
+  setTimeout(function () { o.stop(); }, ms);
+}
+
+document.getElementById('startBtn').onclick = async function () {
+  try {
+    // 音は画面を押した操作の中で準備する必要がある（iPhoneの制限）
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    statusEl.textContent = 'カメラ起動中。QRコードを映してください。';
+    if (!scanning) { scanning = true; requestAnimationFrame(tick); }
+  } catch (e) {
+    statusEl.textContent = '失敗：' + e.name + ' / ' + e.message;
+  }
+};
+
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height,
+                      { inversionAttempts: 'dontInvert' });
+    if (code && code.data) { onRead(code.data); }
+  }
+  setTimeout(function () { requestAnimationFrame(tick); }, 120);
+}
+
+function onRead(text) {
+  const now = Date.now();
+  // 同じQRを映し続けても連続で反応しないようにする
+  if (text === lastText && now - lastTime < 2000) { lastTime = now; return; }
+  lastText = text; lastTime = now;
+
+  if (found.indexOf(text) >= 0) {
+    statusEl.textContent = '読み取り済み：' + text;
+    beep(300, 250);                 // 重複は低い音
+    return;
+  }
+  found.push(text);
+  const li = document.createElement('li');
+  li.textContent = text;
+  listEl.appendChild(li);
+  countEl.textContent = found.length;
+  statusEl.textContent = '読み取り成功：' + text;
+  beep(880, 120);                   // 成功は高い音
+}
+
+document.getElementById('sendBtn').onclick = function () {
+  if (found.length === 0) { alert('まだ読み取っていません'); return; }
+  location.href = GAS_URL + '?scan=' + encodeURIComponent(found.join(','));
+};
+
+document.getElementById('clearBtn').onclick = function () {
+  found.length = 0; listEl.innerHTML = ''; countEl.textContent = '0';
+  lastText = ''; statusEl.textContent = 'クリアしました';
+};
+</script>
+</body>
+</html>
