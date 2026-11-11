@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>天幕在庫管理 ラベル印刷</title>
+<style>
+  body { font-family: -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif; margin: 16px;
+         color: #222; background: #fff; max-width: 640px; font-size: 17px; }
+  h1 { font-size: 22px; margin: 4px 0 12px; }
+  h2 { font-size: 17px; margin: 18px 0 6px; }
+  .box { padding: 10px 12px; border: 1px solid #bbb; border-radius: 10px; margin: 8px 0; }
+  .err { color: #c00; white-space: pre-wrap; }
+  label.row { display: block; margin: 10px 0 0; font-size: 15px; color: #555; }
+  select, input[type=number] { font-size: 18px; padding: 8px; width: 120px; margin-top: 4px; }
+  button { font-size: 18px; padding: 14px 18px; margin: 8px 0; width: 100%; border-radius: 10px;
+           border: 1px solid #999; background: #fff; cursor: pointer; }
+  button.main { background: #2e9e4f; color: #fff; border-color: #2e9e4f; font-weight: bold; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; max-width: 320px; margin: 8px 0; }
+  #grid div { border: 1px solid #999; border-radius: 6px; padding: 6px 0; text-align: center; font-size: 15px; color: #888; }
+  #grid div.skip { background: repeating-linear-gradient(45deg,#eee,#eee 6px,#fff 6px,#fff 12px); }
+  #grid div.use { background: #d9f2e0; color: #1b6b35; font-weight: bold; border-color: #2e9e4f; }
+  #grid div.next { background: #fff; }
+  .small { font-size: 14px; color: #666; }
+</style>
+</head>
+<body>
+<h1>ラベル印刷（エーワン28176）</h1>
+
+<div class="box" id="info"></div>
+
+<h2>印刷開始位置</h2>
+<label class="row">使うラベルの番号（1〜12）：
+  <select id="startPos"></select>
+</label>
+<div id="grid"></div>
+<div class="small" id="plan"></div>
+<div class="small">※ 2ページ目以降は、必ず1番から配置します。</div>
+
+<h2>印刷位置の調整（mm）</h2>
+<label class="row">左右（右へ＋）：<input id="offX" type="number" step="0.1" value="0"></label>
+<label class="row">上下（下へ＋）：<input id="offY" type="number" step="0.1" value="0"></label>
+<button id="saveOff">この端末に補正値を保存</button>
+
+<h2>印刷</h2>
+<label class="row"><input id="frame" type="checkbox"> ラベルの枠線も印刷する（普通紙でのテスト用）</label>
+<button class="main" id="go">PDFを作成して開く</button>
+<button id="goSample">テスト印刷用のサンプル（20枚）を作る</button>
+<div class="box" id="msg">待機中</div>
+<div class="small">印刷するときは、<b>倍率100％（「実際のサイズ」）</b>、ヘッダー・フッターなしにしてください。<br>
+一度印刷したラベル用紙を再び通紙できるかは、プリンターの取扱説明書でご確認ください。</div>
+
+<script src="vendor/jspdf.umd.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script>
+(function () {
+  // ===== エーワン28176の寸法（公式テンプレートZT28176_Aから実測、単位mm） =====
+  var LW = 83.8, LH = 42.3;     // ラベルの幅・高さ
+  var X0 = 20.3, Y0 = 20.0;     // 1番ラベルの左・上の位置
+  var PX = 87.6, PY = 42.3;     // 列の間隔・段の間隔（左端から左端、上端から上端）
+
+  // カラーコード → [名前, 表示色]
+  var COLORS = {
+    WH: ['ホワイト', '#FFFFFF'], RO: ['ロイヤルブルー', '#1A47B8'], GN: ['グリーン', '#1E8A3C'],
+    BE: ['ベージュ', '#D9C3A0'], SK: ['スキンベージュ', '#E8B89A'], GR: ['グレー', '#8A8D91'],
+    YE: ['イエロー', '#F2C200'], OR: ['オレンジ', '#F28C00'], RE: ['レッド', '#D01F2A'],
+    PI: ['ピンク', '#F06EA9'], BW: ['ブラウン', '#6B4226'], BU: ['バーガンディ', '#7A1530'],
+    PU: ['パープル', '#6A3FA0'], LI: ['ライムグリーン', '#8CC63F'], SB: ['スカイブルー', '#3FA9E0'],
+    NA: ['ネイビー', '#1B2A55'], BL: ['ブラック', '#111111']
+  };
+
+  function el(id) { return document.getElementById(id); }
+  function setMsg(t, isErr) { el('msg').textContent = t; el('msg').className = 'box' + (isErr ? ' err' : ''); }
+
+  // ---------- 受け取ったデータの読み取り（アドレスの # 以降。サーバーには送られません） ----------
+  function b64urlDecode(s) {
+    s = s.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4) s += '=';
+    var bin = atob(s), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  function readPayload() {
+    var m = /^#d=([A-Za-z0-9_-]+)$/.exec(location.hash || '');
+    if (!m) return null;
+    var o = JSON.parse(b64urlDecode(m[1]));
+    if (!o || o.v !== 1 || !Array.isArray(o.items)) throw new Error('データの形式が正しくありません');
+    if (o.items.length > 2000) throw new Error('ラベルの枚数が多すぎます（2000枚まで）');
+    o.items.forEach(function (it) {
+      if (!Array.isArray(it) || typeof it[0] !== 'string' || typeof it[1] !== 'string' ||
+          !/^[0-9a-fA-F-]{8,64}$/.test(it[0]) || !/^[A-Za-z0-9.-]{3,60}$/.test(it[1])) {
+        throw new Error('データの中に正しくない項目があります');
+      }
+    });
+    return o;
+  }
+
+  // 管理番号（例：HG-3.6x7.2-RO-20261110-001）から、サイズ・カラー・入庫日を読み取る
+  function parseNo(no) {
+    var m = /^(.+)-([A-Z]{2})-(\d{8})-(\d+)$/.exec(no);
+    if (!m) return null;
+    var sz = /^(?:(HG|SF)-)?([0-9.]+)x([0-9.]+)$/.exec(m[1]);
+    var size = sz ? ((sz[1] ? sz[1] + ' ' : '') + sz[2] + 'm×' + sz[3] + 'm') : m[1];
+    var c = COLORS[m[2]];
+    var y = m[3];
+    return {
+      size: size, color: c ? c[0] : m[2], hex: c ? c[1] : '#000000',
+      date: y.slice(0, 4) + '/' + y.slice(4, 6) + '/' + y.slice(6, 8)
+    };
+  }
+  function makeLabel(id, no) {
+    var p = parseNo(no);
+    if (!p) return { id: id, no: no, size: '', color: '', hex: '#000000', date: '' };
+    return { id: id, no: no, size: p.size, color: p.color, hex: p.hex, date: p.date };
+  }
+
+  // ---------- 文字部分を画像にする（日本語フォントを同梱せずに描くため） ----------
+  function isLight(hex) {
+    var r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5;
+  }
+  function textImage(lb) {
+    var S = 16, w = 42, h = 36;    // 1mmあたり16px
+    var c = document.createElement('canvas');
+    c.width = w * S; c.height = h * S;
+    var g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.textBaseline = 'top';
+    var fam = '"Hiragino Sans","Yu Gothic","Meiryo","Noto Sans JP",sans-serif';
+    function font(mm, bold) { return (bold ? 'bold ' : '') + Math.round(mm * S) + 'px ' + fam; }
+    function draw(text, mm, bold, y, color, outline) {
+      var s = mm; g.font = font(s, bold);
+      var pad = outline ? 0.5 : 0;
+      while (g.measureText(text).width > (w - pad * 2) * S && s > 1.5) { s -= 0.1; g.font = font(s, bold); }
+      var x = pad * S;
+      if (outline) {
+        g.lineJoin = 'round'; g.lineWidth = 0.5 * S; g.strokeStyle = '#000';
+        g.strokeText(text, x, y * S);
+      }
+      g.fillStyle = color;
+      g.fillText(text, x, y * S);
+      return s;
+    }
+    var y = 3;
+    if (lb.size) y += draw(lb.size, 8, true, y, '#000', false) * 1.3;
+    if (lb.color) y += draw(lb.color, 6.5, true, y, lb.hex, isLight(lb.hex)) * 1.4;
+    if (lb.date) y += draw('入庫日 ' + lb.date, 4, false, y, '#000', false) * 1.7;
+    draw(lb.no, 3.4, false, y, '#000', false);
+    return c.toDataURL('image/png');
+  }
+
+  function drawLabel(doc, x, y, lb, withFrame) {
+    if (withFrame) {
+      doc.setDrawColor(150); doc.setLineWidth(0.1);
+      doc.roundedRect(x, y, LW, LH, 2, 2, 'S');
+    }
+    // QRコード（ベクターで描画。中身は個体IDだけ）
+    var qr = qrcode(0, 'M');
+    qr.addData(lb.id); qr.make();
+    var n = qr.getModuleCount();
+    var qrSize = 30, m = qrSize / n;
+    var qx = x + 5, qy = y + (LH - qrSize) / 2;
+    doc.setFillColor(0, 0, 0);
+    for (var r = 0; r < n; r++) {
+      for (var c = 0; c < n; c++) {
+        if (qr.isDark(r, c)) doc.rect(qx + c * m, qy + r * m, m + 0.02, m + 0.02, 'F');
+      }
+    }
+    doc.addImage(textImage(lb), 'PNG', x + 38, y + 3.15, 42, 36, undefined, 'FAST');
+  }
+
+  // ---------- PDF作成 ----------
+  function numVal(id) { var v = parseFloat(el(id).value); return isFinite(v) ? v : 0; }
+  function buildPdf(labels) {
+    var startPos = parseInt(el('startPos').value, 10) || 1;
+    var offX = numVal('offX'), offY = numVal('offY');
+    var withFrame = el('frame').checked;
+    var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    var slot = startPos - 1, pages = 1;
+    labels.forEach(function (lb) {
+      if (slot >= 12) { doc.addPage(); slot = 0; pages++; }    // 2ページ目以降は必ず1番から
+      var col = slot % 2, row = Math.floor(slot / 2);
+      drawLabel(doc, X0 + col * PX + offX, Y0 + row * PY + offY, lb, withFrame);
+      slot++;
+    });
+    return { doc: doc, pages: pages };
+  }
+  function openPdf(labels) {
+    try {
+      var r = buildPdf(labels);
+      setMsg('PDFを作成しました（' + labels.length + '枚 / ' + r.pages + 'ページ）。倍率100％で印刷してください。', false);
+      var url = r.doc.output('bloburl');
+      if (!window.open(url, '_blank')) { location.href = url; }
+    } catch (e) {
+      setMsg('エラー：' + e.message + '\n（vendorフォルダのファイルが正しく置かれているか確認してください）', true);
+    }
+  }
+
+  // ---------- 画面 ----------
+  var payload = null, labels = [], initError = '';
+  try { payload = readPayload(); } catch (e) { initError = e.message; }
+  if (payload) labels = payload.items.map(function (it) { return makeLabel(it[0], it[1]); });
+
+  function sampleLabels() {
+    var sizes = ['3x6', '3x3', 'HG-3.6x7.2', '4x8'];
+    var d = new Date(), y = d.getFullYear(), mo = ('0' + (d.getMonth() + 1)).slice(-2), da = ('0' + d.getDate()).slice(-2);
+    var out = [], codes = Object.keys(COLORS);
+    for (var i = 0; i < 20; i++) {
+      var cc = codes[i % codes.length], sc = sizes[i % sizes.length];
+      var no = sc + '-' + cc + '-' + y + mo + da + '-' + ('00' + (Math.floor(i / codes.length) + 1)).slice(-3);
+      var id = (window.crypto && window.crypto.randomUUID) ? window.crypto.randomUUID() : 'SAMPLE-' + i + '-' + Date.now();
+      out.push(makeLabel(id, no));
+    }
+    return out;
+  }
+
+  // 開始位置の選択肢
+  var sel = el('startPos');
+  for (var i = 1; i <= 12; i++) { var o = document.createElement('option'); o.value = i; o.textContent = i + '番'; sel.appendChild(o); }
+
+  // 補正値：この端末に保存した値 → アプリから渡された値 → 0 の順に使う
+  function loadNum(key, fallback) {
+    try { var v = window.localStorage.getItem(key); if (v !== null && isFinite(parseFloat(v))) return parseFloat(v); } catch (e) { /* 保存できない環境 */ }
+    return isFinite(fallback) ? fallback : 0;
+  }
+  el('offX').value = loadNum('tenmaku_label_ox', payload ? Number(payload.ox) : 0);
+  el('offY').value = loadNum('tenmaku_label_oy', payload ? Number(payload.oy) : 0);
+
+  el('saveOff').onclick = function () {
+    try {
+      window.localStorage.setItem('tenmaku_label_ox', String(numVal('offX')));
+      window.localStorage.setItem('tenmaku_label_oy', String(numVal('offY')));
+      setMsg('補正値を、この端末（このブラウザ）に保存しました。', false);
+    } catch (e) {
+      setMsg('この環境では補正値を保存できませんでした。', true);
+    }
+  };
+
+  function renderPlan(count) {
+    var s = parseInt(el('startPos').value, 10) || 1;
+    var first = Math.min(count, 13 - s);
+    var rest = Math.max(count - first, 0);
+    var pages = (count === 0) ? 0 : 1 + Math.ceil(rest / 12);
+    var g = el('grid');
+    g.innerHTML = '';
+    for (var k = 1; k <= 12; k++) {
+      var d = document.createElement('div');
+      d.textContent = k;
+      d.className = (k < s) ? 'skip' : ((k < s + first) ? 'use' : 'next');
+      g.appendChild(d);
+    }
+    el('plan').textContent = count === 0 ? '' :
+      count + '枚 → 全' + pages + 'ページ（1ページ目：' + s + '番から' + first + '枚）。緑色のところに印刷されます。斜線は使わない場所です。';
+  }
+  sel.onchange = function () { renderPlan(labels.length); };
+
+  if (initError) {
+    el('info').className = 'box err';
+    el('info').textContent = 'データを読み取れませんでした：' + initError;
+  } else if (labels.length > 0) {
+    el('info').textContent = '印刷するラベル：' + labels.length + '枚';
+  } else {
+    el('info').textContent = '印刷するデータがありません。アプリの入庫完了画面やラベル再印刷から開いてください。（下のボタンで、テスト印刷はできます）';
+  }
+  renderPlan(labels.length);
+  el('go').disabled = labels.length === 0;
+  el('go').onclick = function () { openPdf(labels); };
+  el('goSample').onclick = function () {
+    var s = sampleLabels();
+    renderPlan(s.length);
+    openPdf(s);
+  };
+
+  // テスト用に外から使えるようにする（動作確認用）
+  window.__label = { parseNo: parseNo, makeLabel: makeLabel, b64urlDecode: b64urlDecode };
+})();
+</script>
+</body>
+</html>
