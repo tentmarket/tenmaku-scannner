@@ -58,6 +58,10 @@ function beep(freq, ms) {
 }
 
 document.getElementById('startBtn').onclick = async function () {
+      if (typeof jsQR === 'undefined') {
+      statusEl.textContent = 'エラー：QR読み取りの部品（vendor/jsQR.js）が読み込めていません';
+      return;
+    }
   try {
     // 音は画面を押した操作の中で準備する必要がある（iPhoneの制限）
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
