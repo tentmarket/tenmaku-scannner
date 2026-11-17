@@ -85,7 +85,7 @@
     // ----- 確認音（数字を変えると、音の高さ・長さを調整できます） -----
   var SOUND = {
     okFreq: 2000, okMs: 90, okVol: 0.5,                   // 成功：高くて短い「ピッ」
-    ngFreq: 520, ngVol: 0.3, ngPattern: [[0, 130], [190, 130]]   // 警告：「ブブーッ」（開始位置と長さ、ミリ秒）
+    ngFreq: 350, ngVol: 0.3, ngPattern: [[0, 130], [190, 130]]   // 警告：「ブブーッ」（開始位置と長さ、ミリ秒）
   };
   function tone(freq, delayMs, durMs, type, vol) {
     var t0 = audioCtx.currentTime + delayMs / 1000, t1 = t0 + durMs / 1000;
