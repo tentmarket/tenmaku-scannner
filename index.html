@@ -82,16 +82,36 @@
     clearTimeout(flashTimer);
     flashTimer = setTimeout(function () { video.className = ''; }, 400);
   }
-  function beep(freq, ms) {
+    // ----- 確認音（数字を変えると、音の高さ・長さを調整できます） -----
+  var SOUND = {
+    okFreq: 2000, okMs: 90, okVol: 0.5,                   // 成功：高くて短い「ピッ」
+    ngFreq: 520, ngVol: 0.3, ngPattern: [[0, 130], [190, 130], [380, 340]]   // 警告：「ブブーッ」（開始位置と長さ、ミリ秒）
+  };
+  function tone(freq, delayMs, durMs, type, vol) {
+    var t0 = audioCtx.currentTime + delayMs / 1000, t1 = t0 + durMs / 1000;
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.005);
+    g.gain.setValueAtTime(vol, Math.max(t0 + 0.006, t1 - 0.012));
+    g.gain.exponentialRampToValueAtTime(0.0001, t1);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t1 + 0.02);
+  }
+  // 呼び出し側は変えません：高い音（800以上）＝成功の「ピッ」、それ以外＝警告の「ブブーッ」
+  function beep(freq) {
     if (!document.getElementById('soundChk').checked || !audioCtx) return;
     try {
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.frequency.value = freq; g.gain.value = 0.2;
-      o.connect(g); g.connect(audioCtx.destination);
-      o.start();
-      setTimeout(function () { o.stop(); }, ms);
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (freq >= 800) {
+        tone(SOUND.okFreq, 0, SOUND.okMs, 'sine', SOUND.okVol);
+      } else {
+        SOUND.ngPattern.forEach(function (p) { tone(SOUND.ngFreq, p[0], p[1], 'square', SOUND.ngVol); });
+      }
     } catch (e) { /* 音が出せなくても、読み取りは続ける */ }
   }
+
+
 
   // ---------- 読み取り済みリストの保存（画面を更新しても消えないように） ----------
   function save() { try { window.sessionStorage.setItem(STORE_KEY, JSON.stringify(found)); } catch (e) { /* 何もしない */ } }
