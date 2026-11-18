@@ -49,11 +49,14 @@
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbz5uaoRlvg1R72SQ2Z3jmeiokUxt3Jgl9lNHskFfl9OsWYto9ULQD45xUh5fmRrZBA/exec';
 
   // どの用途で開かれたか（アプリからの引き渡し：?mode=out は出庫、?mode=reprint はラベル再印刷）
-  var m = /[?&]mode=(out|reprint)(?:&|$)/.exec(location.search || '');
+  var m = /[?&]mode=(out|reprint|return|scrap|fix)(?:&|$)/.exec(location.search || '');
   var MODE = m ? m[1] : '';
-  var MODES = {
+    var MODES = {
     out:     { title: 'QRスキャナー（出庫）',        send: '② 出庫リストに追加する', info: '読み取ったラベルを、アプリの出庫予定リストに追加します。' },
     reprint: { title: 'QRスキャナー（ラベル再印刷）', send: '② 印刷リストに追加する', info: '読み取ったラベルを、アプリの印刷リストに追加します。' },
+    'return': { title: 'QRスキャナー（返品）',        send: '② 返品リストに追加する', info: '読み取ったラベルを、アプリの返品リストに追加します。' },
+    scrap:   { title: 'QRスキャナー（廃棄）',        send: '② 廃棄の対象にする',     info: '読み取ったラベルを、アプリの廃棄の画面に渡します。' },
+    fix:     { title: 'QRスキャナー（訂正）',        send: '② 訂正の対象にする',     info: '読み取ったラベルを、アプリの訂正の画面に渡します。' },
     '':      { title: 'QRスキャナー',                send: '② 読み取った内容をアプリに送る', info: '' }
   };
   var CFG = MODES[MODE];
